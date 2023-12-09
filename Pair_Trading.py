@@ -294,6 +294,10 @@ def train_and_evaluate_model(ticker_pair):
 
 def main():
 
+    '''
+    Step 1: Fetch the S&P 500 stocks from 2020-01-01 to 2023-12-05. Calculate everyday return for each stock
+    and standardize them. Obtain the dataframe of stocks which sector is "Information Technology".
+    '''
     # Generate the dataframe for each stock in S&P 500
     sp500_stock_tables = generate_sp500_stock_tables()
 
@@ -303,10 +307,14 @@ def main():
     # Get the dataframe of stocks with 'Information Technology' Sector
     it_sector_tables = get_tables_by_sector(sp500_stock_tables_standardized, 'Information Technology')
 
+    '''
+    Step 2: Apply PCA to the dataframe of stocks in IT sector. Set the n_components to 3.
+    Then, clustering the data with OPTICS and set the min_samples to 5. Save different clusters of stock
+    in a list.
+    '''
     # Set n_components to 3 and pass in the stock dataframes in IT sector
     n_components = 3
     principal_components_df = perform_pca(it_sector_tables, n_components)
-    principal_components_df.tail(9)
 
     min_samples = 5  # number of points in a neighborhood for a point to be considered as a core point
     clustered_df = cluster_stocks_with_optics(principal_components_df, min_samples)
@@ -315,10 +323,19 @@ def main():
     # Build the cluster dictionary
     clustered_lists_dict = separate_clusters_to_lists(clustered_df)
 
+    '''
+    Step 3: Find the cointegrated pairs of stock in each cluster with Engle-Granger test. Check the 
+    stationary of the spread of stocks which have passed Engle-Granger test with hurst exponent.
+    '''
     cointegrated_pairs_clusters = find_cointegrated_pairs_for_clusters(clustered_lists_dict, it_sector_tables)
     for cluster, pairs in cointegrated_pairs_clusters.items():
         print(f"Cluster {cluster} Pairs of stocks that are cointegrated and whose price differences exhibit mean-reverting behavior: {pairs}")
 
+    '''
+    Step 4: After obtain the the pairs of stock, use LSTM generate buy and sell signals for trading.
+    Apply the LSTM on each pair of the selected stock, run the strategy based on the buy/sell/hold
+    signals. Backtest, plot and print the results at last.
+    '''
     # Save every pair of stock
     all_results = []
 
