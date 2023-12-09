@@ -292,7 +292,13 @@ def train_and_evaluate_model(ticker_pair):
         "Sharpe Ratio": sharpe_ratio
     }
 
+def main():
+    # Your main code here
+    print("This is the main method.")
 
+
+if __name__ == "__main__":
+    main()
 
 
 
