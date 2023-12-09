@@ -7,9 +7,10 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import OPTICS
 import matplotlib.pyplot as plt
 from statsmodels.tsa.stattools import adfuller, coint
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM, Dropout
-from tensorflow.keras.optimizers import Adam
+from tensorflow import keras
+from keras.models import Sequential
+from keras.layers import Dense, LSTM, Dropout
+from keras.optimizers import Adam
 import os
 
 
