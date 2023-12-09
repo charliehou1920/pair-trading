@@ -303,7 +303,7 @@ def train_and_evaluate_model(ticker_pair):
         "Sharpe Ratio": sharpe_ratio
     }
 
-# function to preprocess the data
+# function to preprocess the data for deep learning
 def preprocess_data(price_diff, look_back=60):
     X, y = [], []
     for i in range(look_back, len(price_diff)):

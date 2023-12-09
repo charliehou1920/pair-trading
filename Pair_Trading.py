@@ -93,8 +93,9 @@ def perform_pca(stock_tables, n_components):
     return principal_components_df
 
 
+# Apply OPTICS clustering algorithm
 def cluster_stocks_with_optics(principal_components_df, min_samples):
-    # Apply OPTICS clustering algorithm
+    
     optics = OPTICS(min_samples=min_samples)
     labels = optics.fit_predict(principal_components_df)
 
@@ -120,6 +121,178 @@ def cluster_stocks_with_optics(principal_components_df, min_samples):
         plt.show()
 
     return principal_components_df
+
+# Show each ticker in every cluster
+def display_tickers_in_clusters(clustered_df):
+
+    unique_clusters = clustered_df['Cluster'].unique()
+
+
+    for cluster in unique_clusters:
+
+        tickers_in_cluster = clustered_df[clustered_df['Cluster'] == cluster].index.tolist()
+
+        print(f"Cluster {cluster}:")
+        print(tickers_in_cluster)
+        print("\n")
+
+# Store the cluster to lists
+def separate_clusters_to_lists(clustered_df):
+    # Get clustering labels except -1
+    unique_clusters = [cluster for cluster in clustered_df['Cluster'].unique() if cluster != -1]
+
+    # Initialize a dictionary to store the tickers
+    clusters_dict = {}
+
+    # Go through every cluster and add the corresponding tickers to the list
+    for cluster in unique_clusters:
+        clusters_dict[cluster] = clustered_df[clustered_df['Cluster'] == cluster].index.tolist()
+
+    return clusters_dict
+
+
+# Calculate hurst exponent for time series
+def calculate_hurst_exponent(time_series):
+    # transfer Series to Numpy
+    cumsum = np.cumsum(time_series - np.mean(time_series)).values  
+    time_spans = np.arange(2, len(time_series))
+    rs_values = []
+
+    for span in time_spans:
+        length = len(cumsum) - len(cumsum) % span
+        span_series = cumsum[:length]
+
+        # use reshape
+        span_series = span_series.reshape(-1, span)
+        span_max = span_series.max(axis=1)
+        span_min = span_series.min(axis=1)
+        r = span_max - span_min
+        s = np.std(span_series, axis=1)
+        rs = np.mean(r / s)
+        rs_values.append(rs)
+
+    hurst_exponent = np.polyfit(np.log(time_spans), np.log(rs_values), 1)[0]
+    return hurst_exponent
+
+# Look for the cointegrated Pairs for clusters
+def find_cointegrated_pairs_for_clusters(clustered_lists_dict, it_sector_tables):
+    results = {}
+
+    for cluster, tickers in clustered_lists_dict.items():
+        pairs = []
+        for i in range(len(tickers)):
+            for j in range(i+1, len(tickers)):
+                ticker1, ticker2 = tickers[i], tickers[j]
+
+                if ticker1 in it_sector_tables and ticker2 in it_sector_tables:
+                    stock1 = it_sector_tables[ticker1]['Close']
+                    stock2 = it_sector_tables[ticker2]['Close']
+
+                    # Engle-Granger test
+                    score, p_value, _ = coint(stock1, stock2)
+                    if p_value < 0.05:
+                        # Calculate the hurst exponent for price spread
+                        hurst = calculate_hurst_exponent(stock1 - stock2)
+                        if hurst < 0.5:
+                            pairs.append((ticker1, ticker2))
+
+        results[cluster] = pairs
+
+    return results
+
+# function to preprocess the data for deep learning
+def preprocess_data(price_diff, look_back=60):
+    X, y = [], []
+    for i in range(look_back, len(price_diff)):
+        X.append(price_diff[i-look_back:i])
+        y.append(price_diff[i])
+    return np.array(X), np.array(y)
+
+# Build the LSTM model
+def build_model(input_shape):
+    model = Sequential()
+    model.add(LSTM(units=50, return_sequences=True, input_shape=input_shape))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=50))
+    model.add(Dropout(0.2))
+    model.add(Dense(units=1))
+    model.compile(optimizer=Adam(lr=0.001), loss='mean_squared_error')
+    return model
+
+
+# Write Deep Neural Network as a function
+def train_and_evaluate_model(ticker_pair):
+    # collect the data and calculate spread
+    stock1 = yf.download(ticker_pair[0], start='2020-01-01', end='2023-12-05')['Close']
+    stock2 = yf.download(ticker_pair[1], start='2020-01-01', end='2023-12-05')['Close']
+    price_difference = stock1 - stock2
+
+    # Build slide window and set up the preprocess data
+    look_back = 60
+    price_difference_normalized = (price_difference - np.mean(price_difference)) / np.std(price_difference)
+    X, y = preprocess_data(price_difference_normalized, look_back)
+
+    # Build the model
+    model = build_model((X.shape[1], 1))
+    model.fit(X, y, epochs=100, batch_size=32)
+
+    # Genereate Trading Signal
+    predicted_price_diff = model.predict(X)
+    actual_price_diff = price_difference_normalized[look_back:look_back+len(predicted_price_diff)]
+    percentage_change = (predicted_price_diff[:-1].flatten() - actual_price_diff[:-1]) / actual_price_diff[:-1]
+
+    upper_threshold = 0.3
+    lower_threshold = -0.3
+    signals = np.where(percentage_change > upper_threshold, 1, np.where(percentage_change < lower_threshold, -1, 0))
+
+    # Back Tesing
+    initial_cash = 10000
+    asset_holdings = np.zeros_like(signals)
+    cash = np.zeros_like(signals)
+    cash[0] = initial_cash
+
+    for t in range(1, len(signals)):
+        asset_holdings[t] = asset_holdings[t-1] + signals[t-1]
+        cash[t] = cash[t-1] - signals[t-1] * price_difference.values[look_back+t]
+
+    portfolio_value = initial_cash + asset_holdings * price_difference.values[look_back:-1]
+
+    # Evaluations
+    final_return = portfolio_value[-1] - initial_cash
+    peak = np.maximum.accumulate(portfolio_value)
+    drawdown = (peak - portfolio_value) / peak
+    max_drawdown = np.max(drawdown)
+    portfolio_returns = np.diff(portfolio_value) / portfolio_value[:-1]
+    sharpe_ratio = np.mean(portfolio_returns) / np.std(portfolio_returns)
+
+    # Plot and save the plot
+    sp500_data = yf.download('SPY', start='2020-01-01', end='2023-12-05')['Close']
+
+    # Rescaled S&P 500 data
+    sp500_scaled = sp500_data / sp500_data.iloc[0] * initial_cash
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(portfolio_value, label='Portfolio Value')
+    plt.plot(sp500_scaled.values, label='S&P 500', alpha=0.7)
+    plt.title(f'Portfolio Value Over Time for {ticker_pair[0]} and {ticker_pair[1]} VS S&P500')
+    plt.xlabel('Time')
+    plt.ylabel('Value in $')
+    plt.legend()
+
+    # Make sure the path of 'data' exists
+    if not os.path.exists('data'):
+        os.makedirs('data')
+    plt.savefig(f'data/portfolio_{ticker_pair[0]}_{ticker_pair[1]}.png')
+    plt.close()
+
+    # return the results
+    return {
+        "Final Return": final_return,
+        "Max Drawdown": max_drawdown,
+        "Sharpe Ratio": sharpe_ratio
+    }
+
+
 
 
 
