@@ -293,8 +293,50 @@ def train_and_evaluate_model(ticker_pair):
     }
 
 def main():
-    # Your main code here
-    print("This is the main method.")
+
+    # Generate the dataframe for each stock in S&P 500
+    sp500_stock_tables = generate_sp500_stock_tables()
+
+    # Standardize the returns in each stock
+    sp500_stock_tables_standardized = standardize_returns(sp500_stock_tables)
+
+    # Get the dataframe of stocks with 'Information Technology' Sector
+    it_sector_tables = get_tables_by_sector(sp500_stock_tables_standardized, 'Information Technology')
+
+    # Set n_components to 3 and pass in the stock dataframes in IT sector
+    n_components = 3
+    principal_components_df = perform_pca(it_sector_tables, n_components)
+    principal_components_df.tail(9)
+
+    min_samples = 5  # number of points in a neighborhood for a point to be considered as a core point
+    clustered_df = cluster_stocks_with_optics(principal_components_df, min_samples)
+    display_tickers_in_clusters(clustered_df)
+
+    # Build the cluster dictionary
+    clustered_lists_dict = separate_clusters_to_lists(clustered_df)
+
+    cointegrated_pairs_clusters = find_cointegrated_pairs_for_clusters(clustered_lists_dict, it_sector_tables)
+    for cluster, pairs in cointegrated_pairs_clusters.items():
+        print(f"Cluster {cluster} Pairs of stocks that are cointegrated and whose price differences exhibit mean-reverting behavior: {pairs}")
+
+    # Save every pair of stock
+    all_results = []
+
+    # Go through every pair of stocks in cointegrated_pairs_clusters
+    for cluster, pairs in cointegrated_pairs_clusters.items():
+        for ticker_pair in pairs:
+            # apply train_and_evaluate_model function on every pair of stocks
+            result = train_and_evaluate_model(ticker_pair)
+            # add the result to the list
+            all_results.append({'pair': ticker_pair, 'results': result})
+
+    # Show the results
+    for item in all_results:
+        print(f"Results for Ticker Pair {item['pair']}:")
+        print(f"Final Return: {item['results']['Final Return']}")
+        print(f"Max Drawdown: {item['results']['Max Drawdown']}")
+        print(f"Sharpe Ratio: {item['results']['Sharpe Ratio']}")
+        print("\n")
 
 
 if __name__ == "__main__":
