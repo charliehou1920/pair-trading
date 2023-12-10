@@ -3,6 +3,16 @@ import numpy as np
 import yfinance as yf
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import OPTICS
+import matplotlib.pyplot as plt
+from statsmodels.tsa.stattools import adfuller, coint
+from tensorflow import keras
+from keras.models import Sequential
+from keras.layers import Dense, LSTM, Dropout
+from keras.optimizers import Adam
+import os
+
 
 # Function to fetch S&P 500 tickers and sectors
 def get_sp500_tickers_and_sectors():
@@ -23,6 +33,7 @@ def fetch_stock_data(ticker, start_date, end_date):
     except Exception as e:
         print(f"Error fetching data for {ticker}: {e}")
         return pd.DataFrame()
+    
 
 # Function to generate SP500 stock tables
 def generate_sp500_stock_tables(start_date='2020-01-01', end_date='2023-12-05'):
@@ -61,17 +72,7 @@ def get_tables_by_sector(stock_tables, target_sector):
             filtered_tables[ticker] = df
     return filtered_tables
 
-# Generate the dataframe for each stock in S&P 500
-sp500_stock_tables = generate_sp500_stock_tables()
-
-# Standardize the returns in each stock
-sp500_stock_tables_standardized = standardize_returns(sp500_stock_tables)
-
-# Get the dataframe of stocks with 'Information Technology' Sector
-it_sector_tables = get_tables_by_sector(sp500_stock_tables, 'Information Technology')
-
-from sklearn.decomposition import PCA
-
+# Calculate PCA for Stocks
 def perform_pca(stock_tables, n_components):
     # 1. Create a dataframe which contains the 'Return' of each stock
     returns_data = pd.DataFrame()
@@ -92,18 +93,10 @@ def perform_pca(stock_tables, n_components):
 
     return principal_components_df
 
-# Set n_components to 3 and pass in the stock dataframes in IT sector
-n_components = 3
-principal_components_df = perform_pca(it_sector_tables, n_components)
-principal_components_df.tail(9)
 
-
-from sklearn.cluster import OPTICS
-import matplotlib.pyplot as plt
-
-
+# Apply OPTICS clustering algorithm
 def cluster_stocks_with_optics(principal_components_df, min_samples):
-    # Apply OPTICS clustering algorithm
+    
     optics = OPTICS(min_samples=min_samples)
     labels = optics.fit_predict(principal_components_df)
 
@@ -126,12 +119,11 @@ def cluster_stocks_with_optics(principal_components_df, min_samples):
             plt.ylabel('PC2')
 
         plt.title('OPTICS Clustering of Stocks')
-        plt.show()
+        # Save the plot
+        plt.savefig(f'data/OPTICS_Clustering.png')
+        plt.close()
 
     return principal_components_df
-
-min_samples = 5  # number of points in a neighborhood for a point to be considered as a core point
-clustered_df = cluster_stocks_with_optics(principal_components_df, min_samples)
 
 # Show each ticker in every cluster
 def display_tickers_in_clusters(clustered_df):
@@ -147,10 +139,7 @@ def display_tickers_in_clusters(clustered_df):
         print(tickers_in_cluster)
         print("\n")
 
-
-display_tickers_in_clusters(clustered_df)
-
-
+# Store the cluster to lists
 def separate_clusters_to_lists(clustered_df):
     # Get clustering labels except -1
     unique_clusters = [cluster for cluster in clustered_df['Cluster'].unique() if cluster != -1]
@@ -164,16 +153,11 @@ def separate_clusters_to_lists(clustered_df):
 
     return clusters_dict
 
-# Build the cluster dictionary
-clustered_lists_dict = separate_clusters_to_lists(clustered_df)
 
-
-
-from statsmodels.tsa.stattools import adfuller, coint
-
+# Calculate hurst exponent for time series
 def calculate_hurst_exponent(time_series):
-    """Calculate hurst exponent for time series"""
-    cumsum = np.cumsum(time_series - np.mean(time_series)).values  # transfer Series to Numpy
+    # transfer Series to Numpy
+    cumsum = np.cumsum(time_series - np.mean(time_series)).values  
     time_spans = np.arange(2, len(time_series))
     rs_values = []
 
@@ -193,8 +177,7 @@ def calculate_hurst_exponent(time_series):
     hurst_exponent = np.polyfit(np.log(time_spans), np.log(rs_values), 1)[0]
     return hurst_exponent
 
-
-
+# Look for the cointegrated Pairs for clusters
 def find_cointegrated_pairs_for_clusters(clustered_lists_dict, it_sector_tables):
     results = {}
 
@@ -220,16 +203,25 @@ def find_cointegrated_pairs_for_clusters(clustered_lists_dict, it_sector_tables)
 
     return results
 
+# function to preprocess the data for deep learning
+def preprocess_data(price_diff, look_back=60):
+    X, y = [], []
+    for i in range(look_back, len(price_diff)):
+        X.append(price_diff[i-look_back:i])
+        y.append(price_diff[i])
+    return np.array(X), np.array(y)
 
-cointegrated_pairs_clusters = find_cointegrated_pairs_for_clusters(clustered_lists_dict, it_sector_tables)
+# Build the LSTM model
+def build_model(input_shape):
+    model = Sequential()
+    model.add(LSTM(units=50, return_sequences=True, input_shape=input_shape))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=50))
+    model.add(Dropout(0.2))
+    model.add(Dense(units=1))
+    model.compile(optimizer=Adam(lr=0.001), loss='mean_squared_error')
+    return model
 
-for cluster, pairs in cointegrated_pairs_clusters.items():
-    print(f"Cluster {cluster} Pairs of stocks that are cointegrated and whose price differences exhibit mean-reverting behavior: {pairs}")
-
-from keras.models import Sequential
-from keras.layers import Dense, LSTM, Dropout
-from keras.optimizers import Adam
-import os
 
 # Write Deep Neural Network as a function
 def train_and_evaluate_model(ticker_pair):
@@ -303,40 +295,74 @@ def train_and_evaluate_model(ticker_pair):
         "Sharpe Ratio": sharpe_ratio
     }
 
-# function to preprocess the data for deep learning
-def preprocess_data(price_diff, look_back=60):
-    X, y = [], []
-    for i in range(look_back, len(price_diff)):
-        X.append(price_diff[i-look_back:i])
-        y.append(price_diff[i])
-    return np.array(X), np.array(y)
+def main():
 
-# Build the LSTM model
-def build_model(input_shape):
-    model = Sequential()
-    model.add(LSTM(units=50, return_sequences=True, input_shape=input_shape))
-    model.add(Dropout(0.2))
-    model.add(LSTM(units=50))
-    model.add(Dropout(0.2))
-    model.add(Dense(units=1))
-    model.compile(optimizer=Adam(lr=0.001), loss='mean_squared_error')
-    return model
+    '''
+    Step 1: Fetch the S&P 500 stocks from 2020-01-01 to 2023-12-05. Calculate everyday return for each stock
+    and standardize them. Obtain the dataframe of stocks which sector is "Information Technology".
+    '''
+    # Generate the dataframe for each stock in S&P 500
+    sp500_stock_tables = generate_sp500_stock_tables()
 
-# Save every pair of stock
-all_results = []
+    # Standardize the returns in each stock
+    sp500_stock_tables_standardized = standardize_returns(sp500_stock_tables)
 
-# Go through every pair of stocks in cointegrated_pairs_clusters
-for cluster, pairs in cointegrated_pairs_clusters.items():
-    for ticker_pair in pairs:
-        # apply train_and_evaluate_model function on every pair of stocks
-        result = train_and_evaluate_model(ticker_pair)
-        # add the result to the list
-        all_results.append({'pair': ticker_pair, 'results': result})
+    # Get the dataframe of stocks with 'Information Technology' Sector
+    it_sector_tables = get_tables_by_sector(sp500_stock_tables_standardized, 'Information Technology')
 
-# Show the results
-for item in all_results:
-    print(f"Results for Ticker Pair {item['pair']}:")
-    print(f"Final Return: {item['results']['Final Return']}")
-    print(f"Max Drawdown: {item['results']['Max Drawdown']}")
-    print(f"Sharpe Ratio: {item['results']['Sharpe Ratio']}")
-    print("\n")
+    '''
+    Step 2: Apply PCA to the dataframe of stocks in IT sector. Set the n_components to 3.
+    Then, clustering the data with OPTICS and set the min_samples to 5. Save different clusters of stock
+    in a list.
+    '''
+    # Set n_components to 3 and pass in the stock dataframes in IT sector
+    n_components = 3
+    principal_components_df = perform_pca(it_sector_tables, n_components)
+
+    min_samples = 5  # number of points in a neighborhood for a point to be considered as a core point
+    clustered_df = cluster_stocks_with_optics(principal_components_df, min_samples)
+    display_tickers_in_clusters(clustered_df)
+
+    # Build the cluster dictionary
+    clustered_lists_dict = separate_clusters_to_lists(clustered_df)
+
+    '''
+    Step 3: Find the cointegrated pairs of stock in each cluster with Engle-Granger test. Check the 
+    stationary of the spread of stocks which have passed Engle-Granger test with hurst exponent.
+    '''
+    cointegrated_pairs_clusters = find_cointegrated_pairs_for_clusters(clustered_lists_dict, it_sector_tables)
+    for cluster, pairs in cointegrated_pairs_clusters.items():
+        print(f"Cluster {cluster} Pairs of stocks that are cointegrated and whose price differences exhibit mean-reverting behavior: {pairs}")
+
+    '''
+    Step 4: After obtain the the pairs of stock, use LSTM generate buy and sell signals for trading.
+    Apply the LSTM on each pair of the selected stock, run the strategy based on the buy/sell/hold
+    signals. Backtest, plot and print the results at last.
+    '''
+    # Save every pair of stock
+    all_results = []
+
+    # Go through every pair of stocks in cointegrated_pairs_clusters
+    for cluster, pairs in cointegrated_pairs_clusters.items():
+        for ticker_pair in pairs:
+            # apply train_and_evaluate_model function on every pair of stocks
+            result = train_and_evaluate_model(ticker_pair)
+            # add the result to the list
+            all_results.append({'pair': ticker_pair, 'results': result})
+
+    # Show the results
+    for item in all_results:
+        print(f"Results for Ticker Pair {item['pair']}:")
+        print(f"Final Return: {item['results']['Final Return']}")
+        print(f"Max Drawdown: {item['results']['Max Drawdown']}")
+        print(f"Sharpe Ratio: {item['results']['Sharpe Ratio']}")
+        print("\n")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
